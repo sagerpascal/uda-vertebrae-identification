@@ -5,14 +5,14 @@ from .classifiers import DRNSegPixelClassifier3D, DRNSegPixelClassifier2D
 from .encoders import UnetDetection, UnetIdentification
 
 
-def get_models(mode, input_ch, n_class, is_data_parallel=False):
+def get_models(mode, n_class, is_data_parallel=False):
     def get_model_list():
         if mode == "detection":
-            encoder = UnetDetection(in_channels=input_ch, out_channels=16)
+            encoder = UnetDetection(in_channels=1, out_channels=16)
             head = DRNSegPixelClassifier3D(in_channels=16, out_channels=n_class)
         elif mode == "identification":
-            encoder = UnetIdentification(in_channels=input_ch, filters=16)
-            head = DRNSegPixelClassifier2D(in_channels=16, out_channels=n_class)
+            encoder = UnetIdentification(in_channels=8, filters=32)
+            head = DRNSegPixelClassifier2D(in_channels=32, out_channels=n_class)
         else:
             raise NotImplementedError("Only detection w. U-Net / identification w. U-Net supported!")
 

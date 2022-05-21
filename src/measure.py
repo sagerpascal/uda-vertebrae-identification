@@ -1,19 +1,20 @@
 # The aim of this script is to provide measurements for any part of the pipeline
 import argparse
 import glob
-import pickle
+import pandas as pd
+from collections import OrderedDict
 
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.ndimage.measurements import label
 import torch
-from models.model_util import get_models
 import torch.nn.functional as F
+from scipy.ndimage.measurements import label
 
 from metrics import Accuracy as AccuracyCustom
 from metrics import DetectionMetricWrapper, Fscore, IoU, AverageValueMeter, Dice
 from metrics import Recall as RecallCustom
+from models.model_util import get_models
 from utility_functions import opening_files
 from utility_functions.labels import LABELS_NO_L6, VERTEBRAE_SIZES
 from utility_functions.sampling_helper_functions import pre_compute_disks, densely_label
@@ -26,7 +27,7 @@ parser.add_argument('--detection_input_size', default=[64, 64, 80], nargs='+', t
                     help="Input size detection model")
 parser.add_argument('--detection_input_shift', default=[32, 32, 40], nargs='+', type=int,
                     help="Shift for overlapping detections")
-parser.add_argument("--n_plots", default=30, type=int, help="Number of sample plots to create")
+parser.add_argument("--n_plots", default=-1, type=int, help="Number of sample plots to create")
 parser.add_argument("--testing_dataset_dir", default="../testing_dataset", help="Path to testing data (input)")
 parser.add_argument("--volume_format", default=".dcm", help="Format of the CT-scan volume (either .nii.gz or .dcm)")
 parser.add_argument("--label_format", default=".nii.gz", help="Format of the labels (either .lml or .nii)")
@@ -34,7 +35,7 @@ parser.add_argument("--resume_detection", type=str, default=None, metavar="PTH.T
 parser.add_argument("--resume_identification", type=str, default=None, metavar="PTH.TAR", help="model(pth) path")
 parser.add_argument('--without_label', action="store_true", help="Whether to use Labels")
 parser.add_argument('--save_detections', action="store_true", help="Whether to save the detection as numpy file")
-parser.add_argument('--save_predictions', action="store_true", help="Whether to save the predictions as image")
+parser.add_argument('--save_predictions', action="store_true", help="Whether to save the predicted centroids as .lml file")
 parser.add_argument("--is_data_parallel", action="store_true", help='whether you use torch.nn.DataParallel')
 parser.add_argument("--ignore_small_masks_detection", action="store_true",
                     help='whether to ignore small masks (mostly error masks)')
@@ -44,20 +45,32 @@ assert str(args.volume_format) == ".nii.gz" and str(args.label_format) == ".lml"
     args.volume_format) == ".dcm" and str(args.label_format) == ".nii.gz"
 
 
+def load_checkpoint(path, use_parallel):
+    prefix = "module."
+    checkpoint = torch.load(path, map_location='cuda')
+
+    if use_parallel is False and list(checkpoint['g_state_dict'].keys())[0].startswith(prefix):
+        checkpoint['g_state_dict'] = OrderedDict(
+            [(k[len(prefix):], v) if k.startswith(prefix) else (k, v) for k, v in checkpoint['g_state_dict'].items()])
+        checkpoint['f1_state_dict'] = OrderedDict(
+            [(k[len(prefix):], v) if k.startswith(prefix) else (k, v) for k, v in checkpoint['f1_state_dict'].items()])
+
+    return checkpoint
+
+
 class DetectionModelWrapper:
 
-    def __init__(self, mode, input_ch, n_class):
-        self.model_g, self.model_head = get_models(mode=mode,
-                                                   input_ch=input_ch,
-                                                   n_class=n_class,
-                                                   is_data_parallel=args.is_data_parallel)
+    def __init__(self, mode, n_class):
+        self.model, self.model_head = get_models(mode=mode,
+                                                 n_class=n_class,
+                                                 is_data_parallel=args.is_data_parallel)
 
-        self.checkpoint = torch.load(args.resume_detection, map_location='cuda')
-        self.model_g.load_state_dict(self.checkpoint['g_state_dict'])
+        self.checkpoint = load_checkpoint(args.resume_detection, args.is_data_parallel)
+        self.model.load_state_dict(self.checkpoint['g_state_dict'])
         self.model_head.load_state_dict(self.checkpoint['f1_state_dict'])
 
         if torch.cuda.is_available():
-            self.model_g.cuda()
+            self.model.cuda()
             self.model_head.cuda()
 
     def predict(self, batch):
@@ -67,7 +80,7 @@ class DetectionModelWrapper:
                 batch_t = batch_t.cuda()
             batch_t = batch_t.permute(0, 4, 1, 2, 3)
 
-            outputs = self.model_g(batch_t)
+            outputs = self.model(batch_t)
             outputs1 = self.model_head(outputs)
 
             result = F.softmax(outputs1, dim=1)
@@ -78,18 +91,17 @@ class DetectionModelWrapper:
 
 class IdentificationModelWrapper:
 
-    def __init__(self, mode, input_ch, n_class):
-        self.model_g, self.model_head = get_models(mode=mode,
-                                                   input_ch=input_ch,
-                                                   n_class=n_class,
-                                                   is_data_parallel=args.is_data_parallel)
+    def __init__(self, mode, n_class):
+        self.model, self.model_head = get_models(mode=mode,
+                                                 n_class=n_class,
+                                                 is_data_parallel=args.is_data_parallel)
 
-        self.checkpoint = torch.load(args.resume_identification, map_location='cuda')
-        self.model_g.load_state_dict(self.checkpoint['g_state_dict'])
+        self.checkpoint = load_checkpoint(args.resume_identification, args.is_data_parallel)
+        self.model.load_state_dict(self.checkpoint['g_state_dict'])
         self.model_head.load_state_dict(self.checkpoint['f1_state_dict'])
 
         if torch.cuda.is_available():
-            self.model_g.cuda()
+            self.model.cuda()
             self.model_head.cuda()
 
     def predict(self, batch):
@@ -100,24 +112,22 @@ class IdentificationModelWrapper:
 
             batch_t = batch_t.permute(0, 3, 1, 2)
 
-            outputs = self.model_g(batch_t)
+            outputs = self.model(batch_t)
             result = self.model_head(outputs)
             result = result.permute(0, 2, 3, 1)
 
             return result.cpu().numpy()
 
 
-def load_spine_model(mtype, detection_weights=np.array([0.1, 0.9])):
+def load_spine_model(mtype):
     if mtype == "detection":
         return DetectionModelWrapper(
             mode=mtype,
-            input_ch=1,
             n_class=2,
         )
     elif mtype == "identification":
         return IdentificationModelWrapper(
             mode=mtype,
-            input_ch=8,
             n_class=1,
         )
 
@@ -168,16 +178,11 @@ def apply_detection_model(volume, model, X_size, y_size, ignore_small_masks_dete
 
     if ignore_small_masks_detection:
         # only keep the biggest connected component
-        structure = np.ones((3, 3, 3), dtype=np.int)
+        structure = np.ones((3, 3, 3), dtype=int)
         labeled, ncomponents = label(output, structure)
         unique, counts = np.unique(labeled, return_counts=True)
-        # ignore_idx = [idx for idx, count in zip(unique, counts) if count < 70000]
-        ignore_idx = [idx for idx, count in zip(unique, counts) if count < counts[np.argsort(counts)[-2]]]
-        for idx in ignore_idx:
-            labeled[labeled == idx] = 0
-
-        output_without_small_masks = labeled
-        output_without_small_masks[output_without_small_masks > 1] = 1
+        output_without_small_masks = np.zeros(labeled.shape)
+        output_without_small_masks[labeled == unique[np.argsort(counts)[-2]]] = 1
 
         if img_name is not None:
             flatten_output = np.sum(output, axis=0)
@@ -216,7 +221,9 @@ def apply_detection_model(volume, model, X_size, y_size, ignore_small_masks_dete
             axes[2, 1].set_title("All Slices")
 
             fig.tight_layout()
-            fig.savefig(img_name.split(".png")[0] + "_detection.png")
+            fig.savefig(img_name)
+            plt.close(fig)
+            plt.close()
             # fig.show()
 
         output = output_without_small_masks
@@ -235,10 +242,8 @@ def apply_identification_model(volume, i_min, i_max, model):
     for i in range(i_min, i_max, 1):
         volume_slice_padded = volume_padded[i - 4:i + 4, :, :]
         volume_slice_padded = np.transpose(volume_slice_padded, (1, 2, 0))
-        # volume_slice_padded = volume_padded[i, :, :]
         patch = volume_slice_padded.reshape(1, *volume_slice_padded.shape)
-        # patch = volume_slice_padded.reshape(1, *volume_slice_padded.shape, 1)
-        result = model.predict(patch)  # expected shape=(None, 80, 320, 8)
+        result = model.predict(patch)
         result = np.squeeze(result, axis=0)
         result = np.squeeze(result, axis=-1)
         result = np.round(result)
@@ -257,9 +262,7 @@ def test_scan(detection_model, detection_X_shape, detection_y_shape,
     print("finished detection")
 
     # get the largest island
-    # _, largest_island_np = sampling_helper_functions.crop_labelling(detections)
     largest_island_np = np.transpose(np.nonzero(detections))
-    # largest_island_np = np.transpose(np.nonzero(largest_island_np)).astype(int)
     i_min = np.min(largest_island_np[:, 0])
     i_max = np.max(largest_island_np[:, 0])
 
@@ -288,6 +291,8 @@ def test_scan(detection_model, detection_X_shape, detection_y_shape,
     plt.tight_layout()
     if img_name is not None:
         fig.savefig(img_name.split(".png")[0] + "_sagital-slices.png")
+        plt.close(fig)
+        plt.close()
 
     def fix_sagital_slices(array):
         array = array.copy()
@@ -325,6 +330,8 @@ def test_scan(detection_model, detection_X_shape, detection_y_shape,
     plt.tight_layout()
     if img_name is not None:
         fig.savefig(img_name.split(".png")[0] + "_sagital-slices-fixed.png")
+        plt.close(fig)
+        plt.close()
 
     fig, axes = plt.subplots(ncols=3, nrows=4, figsize=(20, 15), dpi=300)
 
@@ -406,6 +413,8 @@ def test_scan(detection_model, detection_X_shape, detection_y_shape,
     # fig.show()
     if img_name is not None:
         fig.savefig(img_name)
+        plt.close(fig)
+        plt.close()
 
     # aggregate the predictions
     print("start aggregating")
@@ -450,8 +459,7 @@ def test_scan(detection_model, detection_X_shape, detection_y_shape,
 
 def complete_detection_picture(dataset_dir, plot_path, start, end, volume_format,
                                label_format, ignore_small_masks_detection, detection_input_size, detection_input_shift,
-                               spacing=(1.0, 1.0, 1.0), weights=np.array([0.1, 0.9]), with_label=True,
-                               with_metrics=True, save_detections=False):
+                               spacing=(1.0, 1.0, 1.0), with_label=True, with_metrics=True, save_detections=False):
     if volume_format == '.nii.gz':
         # only one file per volume
         scan_paths = glob.glob(dataset_dir + "/**/*" + volume_format, recursive=True)
@@ -463,7 +471,6 @@ def complete_detection_picture(dataset_dir, plot_path, start, end, volume_format
         scan_paths = scan_paths[start:end]
 
     no_of_scan_paths = len(scan_paths)
-    print("cols", no_of_scan_paths)
     i = 1
 
     if with_metrics:
@@ -485,6 +492,8 @@ def complete_detection_picture(dataset_dir, plot_path, start, end, volume_format
                    "Dice ignored 1": DetectionMetricWrapper(Dice(ignore_channels=[1]), n_class),
                    }
         metric_meters = {k: AverageValueMeter() for k in metrics.keys()}
+
+    detection_model = load_spine_model("detection")
 
     for col, scan_path in enumerate(scan_paths):
 
@@ -521,18 +530,18 @@ def complete_detection_picture(dataset_dir, plot_path, start, end, volume_format
             else:
                 volume, *_ = result
 
-        detection_model = load_spine_model("detection", detection_weights=weights, library=args.library)
+        img_name = plot_path + f"/effect_postprocessing_{i}.png"
         detections = apply_detection_model(volume, detection_model, detection_input_size,
-                                           detection_input_shift, ignore_small_masks_detection)
+                                           detection_input_shift, ignore_small_masks_detection, img_name)
 
         # save detections as weak binary label
         if save_detections:
             np.save(scan_path + "detection", detections)
 
         # fig, ax = plt.subplots(ncols=2, figsize=(8, 8))
-        # ax[0].imshow(volume[volume.shape[0]//2, :, :])
-        # ax[1].imshow(volume[volume.shape[0]//2, :, :])
-        # ax[1].imshow(detections[detections.shape[0]//2, :, :], cmap='jet', alpha=0.5)
+        # ax[0].imshow(volume[volume.shape[0] // 2, :, :])
+        # ax[1].imshow(volume[volume.shape[0] // 2, :, :])
+        # ax[1].imshow(detections[detections.shape[0] // 2, :, :], cmap='jet', alpha=0.5)
         # plt.tight_layout()
         # plt.show()
 
@@ -569,10 +578,10 @@ def complete_detection_picture(dataset_dir, plot_path, start, end, volume_format
 
         axes.imshow(volume_slice.T, cmap='gray')
         axes.imshow(masked_data.T, cmap=cm.autumn, alpha=0.4)
-        # fig.subplots_adjust(wspace=-0.2, hspace=0.4)
         fig.tight_layout()
-        # fig.show()
         fig.savefig(plot_path + f'/detection-complete-{col}.png')
+        plt.close(fig)
+        plt.close()
 
         i += 1
 
@@ -591,13 +600,11 @@ def complete_identification_picture(scans_dir, plot_path, start, end, ignore_sma
         # multiple files per volume
         scan_paths = glob.glob(scans_dir + "/**/")
 
-    scan_paths = scan_paths[-1:]
-
     if end != -1:
         scan_paths = scan_paths[start:end]
 
-    detection_model = load_spine_model("detection", detection_weights=weights, library=args.library)
-    identification_model = load_spine_model("identification", library=args.library)
+    detection_model = load_spine_model("detection")
+    identification_model = load_spine_model("identification")
     i = 1
 
     for col, scan_path in enumerate(scan_paths):
@@ -694,10 +701,12 @@ def complete_identification_picture(scans_dir, plot_path, start, end, ignore_sma
         fig.tight_layout()
         # plt.show()
         fig.savefig(plot_path + '/centroids_' + str(col) + '.png')
+        plt.close(fig)
+        plt.close()
 
 
 def get_stats(scans_dir, volume_format, label_format, ignore_small_masks_detection, detection_input_size,
-              detection_input_shift, spacing=(1.0, 1.0, 1.0), weights=np.array([0.1, 0.9])):
+              detection_input_shift, plot_path, spacing=(1.0, 1.0, 1.0)):
     if volume_format == '.nii.gz':
         # only one file per volume
         scan_paths = glob.glob(scans_dir + "/**/*" + volume_format, recursive=True)
@@ -705,8 +714,8 @@ def get_stats(scans_dir, volume_format, label_format, ignore_small_masks_detecti
         # multiple files per volume
         scan_paths = glob.glob(scans_dir + "/**/")
 
-    detection_model = load_spine_model("detection", detection_weights=weights, library=args.library)
-    identification_model = load_spine_model("identification", library=args.library)
+    detection_model = load_spine_model("detection")
+    identification_model = load_spine_model("identification")
 
     all_correct = 0.0
     all_no = 0.0
@@ -723,8 +732,6 @@ def get_stats(scans_dir, volume_format, label_format, ignore_small_masks_detecti
     lumbar_difference = []
 
     differences_per_vertebrae = {}
-
-    test_sage = {'id': [], 'labels': [], 'pred_labels': []}
 
     for i, scan_path in enumerate(scan_paths):
         print(i, scan_path)
@@ -756,10 +763,6 @@ def get_stats(scans_dir, volume_format, label_format, ignore_small_masks_detecti
             volume=volume,
             ignore_small_masks_detection=ignore_small_masks_detection,
         )
-
-        test_sage['id'].append(i)
-        test_sage['labels'].append(labels)
-        test_sage['pred_labels'].append(pred_labels)
 
         for label, centroid_idx in zip(labels, centroid_indexes):
             min_dist = 20
@@ -828,7 +831,8 @@ def get_stats(scans_dir, volume_format, label_format, ignore_small_masks_detecti
 
     plt.figure(figsize=(20, 10))
     plt.boxplot(data, labels=labels_used)
-    plt.savefig('plots/boxplot.png')
+    plt.savefig(f'{plot_path}/boxplot.png')
+    plt.close()
 
     all_rate = np.around(100.0 * all_correct / all_no, decimals=1)
     all_mean = np.around(np.mean(all_difference), decimals=2)
@@ -850,8 +854,12 @@ def get_stats(scans_dir, volume_format, label_format, ignore_small_masks_detecti
         thoracic_std) + "\n")
     print("Lumbar Id rate: " + str(lumbar_rate) + "%  mean:" + str(lumbar_mean) + "  std:" + str(lumbar_std) + "\n")
 
-    a_file = open("label_sage.pkl", "wb")
-    pickle.dump(test_sage, a_file)
+    results = pd.DataFrame({'Region': ['All', 'Cervical', 'Thoracic', 'Lumbar'],
+                            'ID rate': [all_rate, cervical_rate, thoracic_rate, lumbar_rate],
+                            'Mean': [all_mean, cervical_mean, thoracic_mean, lumbar_mean],
+                            'Std': [all_std, cervical_std, thoracic_std, lumbar_std]})
+
+    results.to_csv(plot_path + "/results.csv", index=False)
 
 
 def single_detection(scan_path, plot_path, volume_format, label_format, ignore_small_masks_detection,
@@ -880,7 +888,7 @@ def single_detection(scan_path, plot_path, volume_format, label_format, ignore_s
 
     cut = np.round(np.mean(centroid_indexes[:, 0])).astype(int)
 
-    detection_model = load_spine_model("detection", detection_weights=weights, library=args.library)
+    detection_model = load_spine_model("detection")
     detections = apply_detection_model(volume, detection_model, detection_input_size, detection_input_shift,
                                        ignore_small_masks_detection)
 
@@ -892,6 +900,8 @@ def single_detection(scan_path, plot_path, volume_format, label_format, ignore_s
     ax.imshow(volume_slice.T, cmap='gray')
     ax.imshow(masked_data.T, cmap=cm.jet, alpha=0.4, origin='lower')
     fig.savefig(plot_path + '/single.png')
+    plt.close(fig)
+    plt.close()
 
 
 def single_identification(scan_path, plot_path, volume_format, label_format, ignore_small_masks_detection,
@@ -920,8 +930,8 @@ def single_identification(scan_path, plot_path, volume_format, label_format, ign
 
     cut = np.round(np.mean(centroid_indexes[:, 0])).astype(int)
 
-    detection_model = load_spine_model("detection", detection_weights=weights, library=args.library)
-    identification_model = load_spine_model("identification", library=args.library)
+    detection_model = load_spine_model("detection")
+    identification_model = load_spine_model("identification")
 
     detections = apply_detection_model(volume, detection_model, detection_input_size, detection_input_shift,
                                        ignore_small_masks_detection)
@@ -940,6 +950,8 @@ def single_identification(scan_path, plot_path, volume_format, label_format, ign
     ax.imshow(volume_slice.T, cmap='gray')
     ax.imshow(masked_data.T, cmap=cm.jet, vmin=1, vmax=27, alpha=0.5, origin='lower')
     fig.savefig(plot_path + '/single_identification.png')
+    plt.close(fig)
+    plt.close()
 
 
 if __name__ == '__main__':
@@ -962,6 +974,7 @@ if __name__ == '__main__':
     if args.resume_detection is not None and args.resume_identification is not None:
         get_stats(
             str(args.testing_dataset_dir),
+            plot_path=str(args.plot_path),
             spacing=tuple(args.spacing),
             detection_input_size=np.array(args.detection_input_size),
             detection_input_shift=np.array(args.detection_input_shift),

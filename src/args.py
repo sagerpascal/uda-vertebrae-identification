@@ -39,8 +39,6 @@ def get_train_args() -> argparse.ArgumentParser:
     parser.add_argument('--weight_decay', type=float, default=2e-5, help='weight_decay (default: 2e-5)')
     parser.add_argument('-b', '--batch_size', type=int, default=16, help="batch_size")
 
-    # ---------- Input Information Setting ---------- #
-    parser.add_argument("--input_ch", type=int, default=1, choices=[1, 8])
 
     # ---------- Mic. ---------- #
     parser.add_argument("--resume", type=str, default=None, metavar="PTH.TAR", help="model(pth) path")

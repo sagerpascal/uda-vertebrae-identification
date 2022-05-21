@@ -46,7 +46,6 @@ if args.resume:
     args2 = checkpoint['args']
     # -------------------------------------- #
     model_g, model_head = get_models(mode=args2.mode,
-                                     input_ch=args2.input_ch,
                                      n_class=args2.n_class,
                                      is_data_parallel=args2.is_data_parallel)
 
@@ -65,7 +64,6 @@ if args.resume:
 
 else:
     model_g, model_head = get_models(mode=args.mode,
-                                     input_ch=args.input_ch,
                                      n_class=args.n_class,
                                      is_data_parallel=args.is_data_parallel)
     optimizer = get_optimizer(list(model_head.parameters()) + list(model_g.parameters()), opt=args.opt,
