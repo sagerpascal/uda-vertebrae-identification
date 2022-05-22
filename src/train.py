@@ -103,7 +103,8 @@ if not args.no_da or args.use_vertebrae_loss:
     tgt_dataset_train = get_dataset(args.tgt_dataset, "train", type="target", mode=args.mode,
                                     use_data_augmentation=args.use_data_augmentation,
                                     with_detection=not args.without_detections and args.mode != "detection",
-                                    use_train_labels_target=args.train_some_tgt_labels)
+                                    use_train_labels_target=args.train_some_tgt_labels,
+                                    with_weak_mask=args.use_region_proposal_loss and args.mode != "detection")
     dataset_train = ConcatDataset(
         dataset_train,
         tgt_dataset_train
@@ -111,7 +112,8 @@ if not args.no_da or args.use_vertebrae_loss:
 
     tgt_dataset_valid = get_dataset(args.tgt_dataset, "test", type="target", mode=args.mode,
                                     use_data_augmentation=args.use_data_augmentation,
-                                    with_detection=not args.without_detections and args.mode != "detection")
+                                    with_detection=not args.without_detections and args.mode != "detection",
+                                    with_weak_mask=not args.use_region_proposal_loss and args.mode != "detection")
     dataset_valid = ConcatDataset(
         dataset_valid,
         tgt_dataset_valid
@@ -123,7 +125,7 @@ train_loader = torch.utils.data.DataLoader(
     shuffle=True,
     pin_memory=True,
     drop_last=True,
-    num_workers=8,
+    num_workers=0,
 )
 
 valid_loader = torch.utils.data.DataLoader(
@@ -132,20 +134,21 @@ valid_loader = torch.utils.data.DataLoader(
     shuffle=True,
     pin_memory=True,
     drop_last=True,
-    num_workers=8,
+    num_workers=0,
 )
 
 if args.use_labeled_tgt:
     tgt_dataset_labeled = get_dataset(args.tgt_dataset, "test", type="target-labeled", mode=args.mode,
                                       use_data_augmentation=args.use_data_augmentation,
-                                      with_detection=not args.without_detections and args.mode != "detection")
+                                      with_detection=not args.without_detections and args.mode != "detection",
+                                      with_weak_mask=not args.use_region_proposal_loss and args.mode != "detection")
     target_labeled_loader = torch.utils.data.DataLoader(
         tgt_dataset_labeled,
         batch_size=args.batch_size,
         shuffle=True,
         pin_memory=True,
         drop_last=True,
-        num_workers=8,
+        num_workers=0,
     )
 
 if torch.cuda.is_available():

@@ -38,7 +38,7 @@ class Epoch:
         s = ', '.join(str_logs)
         return s
 
-    def batch_update_da(self, src_imgs, src_lbls, tgt_imgs, tgt_detections):
+    def batch_update_da(self, src_imgs, src_lbls, tgt_imgs, tgt_detections, weak_mask):
         raise NotImplementedError
 
     def batch_update(self, src_imgs, src_lbls):
@@ -67,12 +67,15 @@ class Epoch:
 
                     src_imgs, src_lbls = Variable(source['sample']), Variable(source['labeling'])
                     tgt_imgs, tgt_detections = Variable(target['sample']), Variable(target['detection'])
+                    weak_mask = Variable(target['weak_mask'])
 
                     if torch.cuda.is_available():
-                        src_imgs, src_lbls, tgt_imgs, tgt_detections = src_imgs.cuda(), src_lbls.cuda(), tgt_imgs.cuda(), tgt_detections.cuda()
+                        src_imgs, src_lbls = src_imgs.cuda(), src_lbls.cuda()
+                        tgt_imgs, tgt_detections = tgt_imgs.cuda(), tgt_detections.cuda()
+                        weak_mask = weak_mask.cuda()
 
                     outputs, target_loss, source_loss = self.batch_update_da(src_imgs, src_lbls, tgt_imgs,
-                                                                             tgt_detections)
+                                                                             tgt_detections, weak_mask)
 
                     source_loss = source_loss.item()
                     source_loss_per_epoch += source_loss
@@ -152,7 +155,7 @@ class TrainEpoch(Epoch):
 
         return source_loss, outputs
 
-    def batch_update_da(self, src_imgs, src_lbls, tgt_imgs, tgt_detections):
+    def batch_update_da(self, src_imgs, src_lbls, tgt_imgs, tgt_detections, weak_mask):
         self.optimizer.zero_grad()
 
         src_outputs = self.model_g(src_imgs)
@@ -164,7 +167,7 @@ class TrainEpoch(Epoch):
         if self.criterion_vert is not None:
             tgt_outputs = self.model_g(tgt_imgs)
             tgt_outputs = self.model_head(tgt_outputs)
-            target_loss = self.criterion_vert(tgt_imgs, tgt_outputs, tgt_detections)
+            target_loss = self.criterion_vert(tgt_imgs, tgt_outputs, tgt_detections, weak_mask)
             target_loss.backward()
         else:
             target_loss = 0
@@ -207,7 +210,7 @@ class ValidEpoch(Epoch):
 
         return source_loss, outputs
 
-    def batch_update_da(self, src_imgs, src_lbls, tgt_imgs, tgt_detections):
+    def batch_update_da(self, src_imgs, src_lbls, tgt_imgs, tgt_detections, weak_mask):
         with torch.no_grad():
             src_outputs = self.model_g(src_imgs)
             src_outputs = self.model_head(src_outputs)
@@ -217,7 +220,7 @@ class ValidEpoch(Epoch):
             if self.criterion_vert is not None:
                 tgt_outputs = self.model_g(tgt_imgs)
                 tgt_outputs = self.model_head(tgt_outputs)
-                target_loss = self.criterion_vert(tgt_imgs, tgt_outputs, tgt_detections)
+                target_loss = self.criterion_vert(tgt_imgs, tgt_outputs, tgt_detections, weak_mask)
 
             else:
                 target_loss = 0

@@ -3,7 +3,7 @@ import glob
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-
+from skimage.segmentation import felzenszwalb
 
 def check_src_tgt_ok(src_dataset_name, tgt_dataset_name):
     if not (src_dataset_name == "biomedia" and tgt_dataset_name == "covid19-ct"):
@@ -33,13 +33,7 @@ class ConcatDataset(torch.utils.data.Dataset):
 class BaseDataset(Dataset):
 
     def __init__(self, sample_dir, has_labels, categorise=False, is_3D=True, n_classes=2, preprocessing=None,
-                 load_detection_sample=False, sample_dir_2=None):
-        """
-        :param sample_dir: Path to training / validation / testing sample directory
-        :param has_labels: Bool, True if labels available for this dataset
-        :param categorise: Convert labels to 1-hot
-        :param sample_dir_2: Optional second path containing samples
-        """
+                 load_detection_sample=False, weak_seg_mask=False, sample_dir_2=None):
         self.sample_dir = sample_dir
         self.categorise = categorise
         self.has_labels = has_labels
@@ -47,6 +41,7 @@ class BaseDataset(Dataset):
         self.n_classes = n_classes
         self.preprocessing = preprocessing
         self.load_detection_sample = load_detection_sample
+        self.weak_seg_mask = weak_seg_mask
         self.files, self.labels, self.detections, self.paths = self.get_samples_list(sample_dir, sample_dir_2)
 
     def __len__(self):
@@ -79,21 +74,27 @@ class BaseDataset(Dataset):
         if self.preprocessing is not None:
             sample, labeling, detection = self.do_preprocessing(sample, labeling, detection)
 
+        if self.weak_seg_mask:
+            weak_mask = self.get_segmentation_mask(sample, detection)
+        else:
+            weak_mask = None
 
         sample = self.to_tensor_(sample)
         labeling = self.to_tensor_(labeling)
         detection = self.to_tensor_(detection)
+        weak_mask = self.to_tensor_(weak_mask).long()
 
         return {'sample': sample,
                 'labeling': labeling,
                 'detection': detection,
+                'weak_mask': weak_mask,
                 }
 
     def to_tensor_(self, array):
         if array is not None:
             return torch.from_numpy(array)
         else:
-            return -1
+            return torch.tensor(-1)
 
     def do_preprocessing(self, sample, labelling, detection):
         sample = np.transpose(sample, (1, 2, 0))
@@ -150,8 +151,52 @@ class BaseDataset(Dataset):
 
         return files, labels, detections, paths
 
+    def get_segmentation_mask(self, sample, detection):
+        img = sample[4]
+        if np.any(detection != 0):
+            spine_area = np.where(detection != 0)
+            dim0_min, dim0_max = np.min(spine_area[0]), np.max(spine_area[0])
+            dim1_min, dim1_max = np.min(spine_area[1]), np.max(spine_area[1])
+            tgt_img_cropped = img[dim0_min:dim0_max + 1, dim1_min:dim1_max + 1]
+            detection_cropped = detection[dim0_min:dim0_max + 1, dim1_min:dim1_max + 1]
+            spine_cropped = tgt_img_cropped * detection_cropped
 
-def get_dataset(dataset_name, split, type, mode, use_data_augmentation, with_detection, use_train_labels_target=None):
+            spine_cropped_enhanced = (spine_cropped > 1.42) * spine_cropped
+            segments_felzenszwalb = felzenszwalb(spine_cropped_enhanced, scale=60, sigma=0.8, min_size=150)
+
+            for i in range(np.max(segments_felzenszwalb) + 1):
+                positions = np.where(segments_felzenszwalb == i)
+                length = np.max(positions[1]) - np.min(positions[1])
+                if length > 50:
+                    segments_felzenszwalb[segments_felzenszwalb == i] = 0
+
+            unique = np.unique(segments_felzenszwalb)
+            positions = {}
+            for u in unique:
+                if u == 0:
+                    continue
+                p = np.where(segments_felzenszwalb == u)
+                positions[u] = (np.min(p[1]), np.max(p[1]))
+
+            for u1, p1 in positions.items():
+                for u2, p2 in positions.items():
+                    if u1 == u2:
+                        continue
+                    if ((p1[0] - 4) <= p2[0] and (p1[1] + 4) >= p2[1]):
+                        segments_felzenszwalb[segments_felzenszwalb == u2] = u1
+
+            segments_felzenszwalb = np.pad(segments_felzenszwalb, (
+                (dim0_min, img.shape[0] - dim0_max - 1), (dim1_min, img.shape[1] - dim1_max - 1)), mode="constant",
+                                           constant_values=0)
+
+            return segments_felzenszwalb
+
+        else:
+            return np.zeros_like(img)
+
+
+def get_dataset(dataset_name, split, type, mode, use_data_augmentation, with_detection, with_weak_mask=False,
+                use_train_labels_target=None):
     assert mode == "detection" or mode == "identification"
     assert type == "source" or type == "target" or type == "target-labeled"
 
@@ -168,11 +213,11 @@ def get_dataset(dataset_name, split, type, mode, use_data_augmentation, with_det
             use_train_labels_target and mode == "identification" and type == "target" and suffix == "training")
 
     if dataset_name == "biomedia":
-        sample_dir = f"../../data/biomedia/samples/{mode}/{suffix}"
-        sample_dir_2 = f"../../data/biomedia/samples/{mode}/{suffix}_labeled"
+        sample_dir = f"../data/biomedia/samples/{mode}/{suffix}"
+        sample_dir_2 = f"../data/biomedia/samples/{mode}/{suffix}_labeled"
     elif dataset_name == "covid19-ct":
-        sample_dir = f"../../data/covid19-ct/samples/{mode}/{suffix}"
-        sample_dir_2 = f"../../data/covid19-ct/samples/{mode}/{suffix}_labeled"
+        sample_dir = f"../data/covid19-ct/samples/{mode}/{suffix}"
+        sample_dir_2 = f"../data/covid19-ct/samples/{mode}/{suffix}_labeled"
     else:
         raise AttributeError("Unknown dataset name")
 
@@ -187,7 +232,8 @@ def get_dataset(dataset_name, split, type, mode, use_data_augmentation, with_det
                            preprocessing=preprocessing, sample_dir_2=sample_dir_2)
     elif mode == "identification":
         return BaseDataset(sample_dir, has_labels=has_labels, is_3D=False, n_classes=1,
-                           load_detection_sample=with_detection, preprocessing=preprocessing, sample_dir_2=sample_dir_2)
+                           load_detection_sample=with_detection, preprocessing=preprocessing, sample_dir_2=sample_dir_2,
+                           weak_seg_mask=with_detection and with_weak_mask)
 
 
 def get_augmentations():

@@ -1,7 +1,5 @@
-import numpy as np
 import torch
 import torch.nn as nn
-from skimage.segmentation import felzenszwalb
 
 
 class CrossEntropyLoss(nn.Module):
@@ -28,67 +26,12 @@ class RegionProposalLoss(nn.Module):
         super().__init__()
         self.id_loss = IdentificationLoss()
 
-    def get_segmentation_mask(self, tgt_img, detection):
-
-        img = tgt_img[4].cpu().detach().numpy()
-        detection = detection.cpu().detach().numpy()
-
-        if np.any(detection != 0):
-            spine_area = np.where(detection != 0)
-            dim0_min, dim0_max = np.min(spine_area[0]), np.max(spine_area[0])
-            dim1_min, dim1_max = np.min(spine_area[1]), np.max(spine_area[1])
-            tgt_img_cropped = img[dim0_min:dim0_max + 1, dim1_min:dim1_max + 1]
-            detection_cropped = detection[dim0_min:dim0_max + 1, dim1_min:dim1_max + 1]
-            spine_cropped = tgt_img_cropped * detection_cropped
-
-            spine_cropped_enhanced = (spine_cropped > 1.42) * spine_cropped
-            segments_felzenszwalb = felzenszwalb(spine_cropped_enhanced, scale=60, sigma=0.8, min_size=150)
-
-            for i in range(np.max(segments_felzenszwalb) + 1):
-                positions = np.where(segments_felzenszwalb == i)
-                length = np.max(positions[1]) - np.min(positions[1])
-                if length > 50:
-                    segments_felzenszwalb[segments_felzenszwalb == i] = 0
-
-            unique = np.unique(segments_felzenszwalb)
-            positions = {}
-            for u in unique:
-                if u == 0:
-                    continue
-                p = np.where(segments_felzenszwalb == u)
-                positions[u] = (np.min(p[1]), np.max(p[1]))
-
-            for u1, p1 in positions.items():
-                for u2, p2 in positions.items():
-                    if u1 == u2:
-                        continue
-                    if ((p1[0] - 4) <= p2[0] and (p1[1] + 4) >= p2[1]):
-                        segments_felzenszwalb[segments_felzenszwalb == u2] = u1
-
-            segments_felzenszwalb = np.pad(segments_felzenszwalb, (
-                (dim0_min, img.shape[0] - dim0_max - 1), (dim1_min, img.shape[1] - dim1_max - 1)), mode="constant",
-                                           constant_values=0)
-
-            return torch.as_tensor(segments_felzenszwalb).cuda()
-
-        else:
-            return torch.zeros_like(tgt_img[4])
-
-    def forward(self, tgt_img, y_tgt_pr, mask):
+    def forward(self, tgt_img, y_tgt_pr, mask, weak_mask):
         loss = torch.tensor(0., device='cuda')
         weak_labels = torch.zeros_like(y_tgt_pr)
         for b in range(tgt_img.shape[0]):
-            proposed_mask_b = self.get_segmentation_mask(tgt_img[b], mask[b])
+            proposed_mask_b = weak_mask[b]
             y_tgt_pr_b = y_tgt_pr[b].squeeze(0)
-
-            # # fig, ax = plt.subplots(nrows=2, ncols=2, figsize=(8, 8))
-            # # ax[0, 0].imshow(tgt_img[b, 4].cpu().numpy())
-            # # ax[0, 1].imshow(tgt_img[b, 4].cpu().numpy())
-            # # ax[0, 1].imshow(proposed_mask_b.cpu(), cmap='jet', alpha=0.5)
-            # # ax[1, 0].imshow(proposed_mask_b.cpu().numpy())
-            # # ax[1, 1].imshow(proposed_mask_b.cpu().numpy() == 2)
-            # # plt.tight_layout()
-            # # plt.show()
 
             proposed_masks = list(torch.unique(proposed_mask_b))[1:]
             for i in proposed_masks:
@@ -105,17 +48,6 @@ class RegionProposalLoss(nn.Module):
                 proposed_mask_b[proposed_mask_b == value] = float(med)
                 weak_labels[b] = proposed_mask_b
 
-            # fig, ax = plt.subplots(nrows=2, ncols=2, figsize=(8, 8))
-            # ax[0, 0].imshow(tgt_img[b, 4].cpu().numpy())
-            # ax[0, 1].imshow(tgt_img[b, 4].cpu().numpy())
-            # mask_01 = ax[0, 1].imshow(weak_labels[b].squeeze().cpu(), cmap='jet', alpha=0.5)
-            # ax[1, 0].imshow(proposed_mask_b.cpu().numpy())
-            # ax[1, 1].imshow(weak_labels[b].squeeze().cpu().numpy())
-            # fig.colorbar(mask_01, ax=ax[0, 1])
-            # plt.tight_layout()
-            # plt.show()
-
-        # return self.id_loss(y_tgt_pr, weak_labels)
         return loss
 
 
@@ -131,7 +63,7 @@ class DescendingLoss(nn.Module):
             mask_shifted = torch.zeros_like(mask)
             pred_shifted[:, :, :-shift] = pred[:, :, shift:]
             mask_shifted[:, :, :-shift] = mask[:, :, shift:] * mask[:, :, :-shift]
-            invalid += torch.sum((pred * mask - pred_shifted * mask_shifted) < 0)  # TODO: Min x,0 instead of <0
+            invalid += torch.sum((pred * mask - pred_shifted * mask_shifted) < 0)
         return invalid / pred.numel()
 
 
@@ -143,7 +75,7 @@ class VerticalEqualLoss(nn.Module):
         pred_masked[pred_masked == 0] = float('nan')
         col_median = torch.nanmedian(pred_masked, axis=2)
         col_median = torch.nan_to_num(col_median[0]).unsqueeze(2).repeat(1, 1, y_pr.shape[2], 1)
-        invalid = torch.sum(((pred - col_median) * mask) != 0)  # TODO: Torch.abs instead of != 0
+        invalid = torch.sum(((pred - col_median) * mask) != 0)
         return invalid / pred.numel()
 
 
@@ -230,11 +162,11 @@ class VertebraeCharacteristicsLoss(nn.Module):
         self.center_dist_loss = CenterDistLoss() if use_center_dist_loss else NoneLoss()
         self.region_proposal_loss = RegionProposalLoss() if use_region_proposal_loss else NoneLoss()
 
-    def forward(self, targets, predictions, mask=None):
-        loss = self.descending_loss(predictions, mask) * 20
-        loss += self.vertical_equal_loss(predictions, mask)
-        loss += self.center_dist_loss(predictions, mask) / 1000
-        loss += self.region_proposal_loss(targets, predictions, mask) / 100
+    def forward(self, targets, predictions, detection_mask=None, weak_mask=None):
+        loss = self.descending_loss(predictions, detection_mask) * 20
+        loss += self.vertical_equal_loss(predictions, detection_mask)
+        loss += self.center_dist_loss(predictions, detection_mask) / 1000
+        loss += self.region_proposal_loss(targets, predictions, detection_mask, weak_mask) / 100
 
         loss.requires_grad = True
         return loss

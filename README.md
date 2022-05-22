@@ -160,7 +160,7 @@ python generate_identification_samples.py --training_dataset_dir ../data/covid19
 Run the training of the identification module (optionally, add `--train_some_tgt_labels` to use some target labels during training):
 
 ```bash
-python train.py --mode identification --use_vertebrae_loss --input_ch 8 --epochs 100 --lr 0.0005 --batch_size 32 --use_labeled_tgt --use_wandb 
+python train.py --mode identification --use_vertebrae_loss --epochs 100 --lr 0.0005 --batch_size 32 --use_labeled_tgt --use_wandb 
 ```
 
 ## Evaluation
