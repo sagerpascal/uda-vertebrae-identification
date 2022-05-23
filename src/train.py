@@ -125,7 +125,7 @@ train_loader = torch.utils.data.DataLoader(
     shuffle=True,
     pin_memory=True,
     drop_last=True,
-    num_workers=0,
+    num_workers=args.num_workers,
 )
 
 valid_loader = torch.utils.data.DataLoader(
@@ -134,7 +134,7 @@ valid_loader = torch.utils.data.DataLoader(
     shuffle=True,
     pin_memory=True,
     drop_last=True,
-    num_workers=0,
+    num_workers=args.num_workers,
 )
 
 if args.use_labeled_tgt:
@@ -148,7 +148,7 @@ if args.use_labeled_tgt:
         shuffle=True,
         pin_memory=True,
         drop_last=True,
-        num_workers=0,
+        num_workers=args.num_workers,
     )
 
 if torch.cuda.is_available():

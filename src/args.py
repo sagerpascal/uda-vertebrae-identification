@@ -41,6 +41,7 @@ def get_train_args() -> argparse.ArgumentParser:
 
 
     # ---------- Mic. ---------- #
+    parser.add_argument("--num_workers", type=int, default=8, help="Number of workers of the data loader")
     parser.add_argument("--resume", type=str, default=None, metavar="PTH.TAR", help="model(pth) path")
     parser.add_argument('--use_wandb', action="store_true", help="Whether to log results with weight & bias")
     parser.add_argument('--no_verbose', action="store_true", help="Whether to use console output")
