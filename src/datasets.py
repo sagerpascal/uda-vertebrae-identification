@@ -6,8 +6,9 @@ from torch.utils.data import Dataset
 from skimage.segmentation import felzenszwalb
 
 def check_src_tgt_ok(src_dataset_name, tgt_dataset_name):
-    if not (src_dataset_name == "biomedia" and tgt_dataset_name == "covid19-ct"):
-        raise AssertionError("you must use spine-labeled / covid-ct_harvard pair")
+    if not ((src_dataset_name == "biomedia" and tgt_dataset_name == "covid19-ct") or
+            (src_dataset_name == "biomedia" and tgt_dataset_name == "verse19")):
+        raise AssertionError("invalid combination of source and target data sets")
 
 
 def get_n_class(mode):
@@ -213,11 +214,14 @@ def get_dataset(dataset_name, split, type, mode, use_data_augmentation, with_det
             use_train_labels_target and mode == "identification" and type == "target" and suffix == "training")
 
     if dataset_name == "biomedia":
-        sample_dir = f"../data/biomedia/samples/{mode}/{suffix}"
-        sample_dir_2 = f"../data/biomedia/samples/{mode}/{suffix}_labeled"
+        sample_dir = f"../data/samples/{mode}/{suffix}"
+        sample_dir_2 = f"../data/samples/{mode}/{suffix}_labeled"
     elif dataset_name == "covid19-ct":
-        sample_dir = f"../data/covid19-ct/samples/{mode}/{suffix}"
-        sample_dir_2 = f"../data/covid19-ct/samples/{mode}/{suffix}_labeled"
+        sample_dir = f"../data/covid-ct_harvard/samples/{mode}/{suffix}"
+        sample_dir_2 = f"../data/covid-ct_harvard/samples/{mode}/{suffix}_labeled"
+    elif dataset_name == "verse19":
+        sample_dir = f"../data/verse/samples/{mode}/{suffix}"
+        sample_dir_2 = f"../data/verse/samples/{mode}/{suffix}_labeled"
     else:
         raise AttributeError("Unknown dataset name")
 

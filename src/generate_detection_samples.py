@@ -52,7 +52,7 @@ def generate_samples(dataset_dir, sample_dir, spacing, sample_size, no_of_sample
 
     for cnt, data_path in tqdm(enumerate(paths), total=len(paths)):
 
-        if volume_format == '.nii.gz' and (label_format == ".lml" or not with_label):
+        if volume_format == '.nii.gz':
             # get path to corresponding metadata
             data_path_without_ext = data_path[:-ext_len]
             metadata_path = data_path_without_ext + label_format
@@ -61,7 +61,10 @@ def generate_samples(dataset_dir, sample_dir, spacing, sample_size, no_of_sample
                 # get image, resample it and scale centroids accordingly
                 volume, *_ = opening_files.read_volume_nii_format(data_path, spacing=spacing)
                 if with_label:
-                    labels, centroids = opening_files.extract_centroid_info_from_lml(metadata_path)
+                    if label_format == ".lml":
+                        labels, centroids = opening_files.extract_centroid_info_from_lml(metadata_path)
+                    else:
+                        labels, centroids = opening_files.extract_centroid_info_from_json(metadata_path)
 
             except Exception as e:
                 print(e)

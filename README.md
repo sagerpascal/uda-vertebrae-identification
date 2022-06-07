@@ -53,6 +53,17 @@ root/
         |-testing
         |-training_labeled
         |-testing_labeled
+   | -verse
+     |-training_dataset
+     |-testing_dataset
+     |-samples
+      |-detection
+        |-testing_labeled
+      |-identification
+        |-training
+        |-testing
+        |-training_labeled
+        |-testing_labeled
    |-src
      |-plots_debug
      |-models
@@ -93,7 +104,21 @@ cd src
 python preprocessing/unzip_harvard_covid.py --dataset_path ../data/covid19-ct/subjects --tmp_path ../data/covid19-ct/dataset
 ```
 
-Copy the labels in the corresponding folder `data/covid19-ct` 
+Copy the labels in the corresponding folder `data/covid19-ct` .
+
+### VerSe-2019 Data Set (Target Data Set)
+1. Download the data from [https://github.com/anjany/verse](https://github.com/anjany/verse).
+2. Unzip the three zip-files in folders called `verse/training_dataset`, `verse/validation_dataset_labeled`, `verse/testing_dataset_labeled`. In each folder should now be a subfolder called `rawdata` and `derivatives`
+
+These files must then be brought to the correct orientation:
+```bash
+cd src
+python preprocessing/reorient_verse.py --path ../data/verse/training_dataset/
+python preprocessing/reorient_verse.py --path ../data/verse/validation_dataset_labeled/
+python preprocessing/reorient_verse.py --path ../data/verse/testing_dataset_labeled/
+```
+
+From the training data set, copy 20 samples in a new folder called `training_dataset_labeled`, from the remaining files, delete the json labels.
 
 ## Detection Module
 
@@ -123,7 +148,8 @@ python train.py --epochs 100 --lr 0.001 --batch_size 16 --use_wandb --no_da --us
 
 - set `testing_dataset_dir` either to `../data/biomedia/testing_dataset` or `../data/covid19-ct/testing_dataset_labeled`
 - When using the `covid19-ct` data set, then set `volume_format`: `.dcm` and `label_format`: `.nii.gz`,
-- when using the `biomedia` data set, then set `volume_format`: `.nii.gz` and `label_format`: `.lml`
+- when using the `biomedia` data set, then set `volume_format`: `.nii.gz` and `label_format`: `.lml`,
+- when using the `verse19` data set, then set `volume_format`: `.nii.gz` and `label_format`: `.json`
 ```bash
 python measure.py --testing_dataset_dir <testing_dataset_dir> --volume_format <volume_format> --label_format <label_format> --resume_detection <path/to/detection_model.pth> --ignore_small_masks_detection
 ```

@@ -11,9 +11,9 @@ import pydicom
 from tqdm import tqdm
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--dataset_path", type=str, default='../../data2/covid19-ct/subjects',
+parser.add_argument("--dataset_path", type=str, default='../../data/covid19-ct/subjects',
                     help="Path to the downloaded 'Subjext X.rar' files")
-parser.add_argument("--tmp_path", type=str, default='../../data2/covid19-ct/dataset',
+parser.add_argument("--tmp_path", type=str, default='../../data/covid19-ct/dataset',
                     help="Path to unzip the data temporarily")
 
 args = parser.parse_args()

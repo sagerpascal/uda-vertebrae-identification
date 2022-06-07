@@ -30,7 +30,7 @@ parser.add_argument('--detection_input_shift', default=[32, 32, 40], nargs='+', 
 parser.add_argument("--n_plots", default=-1, type=int, help="Number of sample plots to create")
 parser.add_argument("--testing_dataset_dir", default="../testing_dataset", help="Path to testing data (input)")
 parser.add_argument("--volume_format", default=".dcm", help="Format of the CT-scan volume (either .nii.gz or .dcm)")
-parser.add_argument("--label_format", default=".nii.gz", help="Format of the labels (either .lml or .nii)")
+parser.add_argument("--label_format", default=".nii.gz", help="Format of the labels (either .lml, .nii, .json)")
 parser.add_argument("--resume_detection", type=str, default=None, metavar="PTH.TAR", help="model(pth) path")
 parser.add_argument("--resume_identification", type=str, default=None, metavar="PTH.TAR", help="model(pth) path")
 parser.add_argument('--without_label', action="store_true", help="Whether to use Labels")
@@ -41,13 +41,13 @@ parser.add_argument("--ignore_small_masks_detection", action="store_true",
                     help='whether to ignore small masks (mostly error masks)')
 args = parser.parse_args()
 
-assert str(args.volume_format) == ".nii.gz" and str(args.label_format) == ".lml" or str(
-    args.volume_format) == ".dcm" and str(args.label_format) == ".nii.gz"
+assert str(args.volume_format) == ".nii.gz" and (str(args.label_format) == ".lml" or str(args.label_format) == ".json")\
+       or str(args.volume_format) == ".dcm" and str(args.label_format) == ".nii.gz"
 
 
 def load_checkpoint(path, use_parallel):
     prefix = "module."
-    checkpoint = torch.load(path, map_location='cuda')
+    checkpoint = torch.load(path, map_location=torch.device('cpu') )
 
     if use_parallel is False and list(checkpoint['g_state_dict'].keys())[0].startswith(prefix):
         checkpoint['g_state_dict'] = OrderedDict(
@@ -497,11 +497,20 @@ def complete_detection_picture(dataset_dir, plot_path, start, end, volume_format
 
     for col, scan_path in enumerate(scan_paths):
 
-        if volume_format == '.nii.gz' and label_format == ".lml":
+        if "msk" in scan_path:
+            # a mask of the verse data set
+            continue
+        
+        print("Processing", scan_path)
+
+        if volume_format == '.nii.gz':
             if with_label:
                 scan_path_without_ext = scan_path[:-len(volume_format)]
                 centroid_path = scan_path_without_ext + label_format
-                labels, centroids = opening_files.extract_centroid_info_from_lml(centroid_path)
+                if label_format == ".lml":
+                    labels, centroids = opening_files.extract_centroid_info_from_lml(centroid_path)
+                else:
+                    labels, centroids = opening_files.extract_centroid_info_from_json(centroid_path)
             scan_name = (scan_path.rsplit('/', 1)[-1])[:-len(volume_format)]
 
         elif volume_format == '.dcm' and label_format == ".nii.gz":
@@ -538,12 +547,6 @@ def complete_detection_picture(dataset_dir, plot_path, start, end, volume_format
         if save_detections:
             np.save(scan_path + "detection", detections)
 
-        # fig, ax = plt.subplots(ncols=2, figsize=(8, 8))
-        # ax[0].imshow(volume[volume.shape[0] // 2, :, :])
-        # ax[1].imshow(volume[volume.shape[0] // 2, :, :])
-        # ax[1].imshow(detections[detections.shape[0] // 2, :, :], cmap='jet', alpha=0.5)
-        # plt.tight_layout()
-        # plt.show()
 
         if with_label:
             centroid_indexes = centroids / np.array(spacing)
@@ -559,6 +562,15 @@ def complete_detection_picture(dataset_dir, plot_path, start, end, volume_format
                                             labels,
                                             centroid_indexes,
                                             use_labels=False)
+
+            fig, ax = plt.subplots(ncols=3, figsize=(8, 8))
+            ax[0].imshow(volume[volume.shape[0] // 2, :, :])
+            ax[1].imshow(volume[volume.shape[0] // 2, :, :])
+            ax[1].imshow(detections[detections.shape[0] // 2, :, :], cmap='jet', alpha=0.5)
+            ax[2].imshow(volume[volume.shape[0] // 2, :, :])
+            ax[2].imshow(dense_labelling[detections.shape[0] // 2, :, :], cmap='jet', alpha=0.5)
+            plt.tight_layout()
+            plt.show()
 
             dense_labelling_t = torch.from_numpy((dense_labelling)).long().unsqueeze(0)
             detections_t = torch.from_numpy((detections)).float().unsqueeze(0).unsqueeze(0).repeat(1, 2, 1, 1, 1)
@@ -611,11 +623,14 @@ def complete_identification_picture(scans_dir, plot_path, start, end, ignore_sma
         fig, axes = plt.subplots(figsize=(8, 8), dpi=300)
         print(i, scan_path)
 
-        if volume_format == '.nii.gz' and label_format == ".lml":
+        if volume_format == '.nii.gz':
             if with_label:
                 scan_path_without_ext = scan_path[:-len(volume_format)]
                 centroid_path = scan_path_without_ext + label_format
-                labels, centroids = opening_files.extract_centroid_info_from_lml(centroid_path)
+                if label_format == ".lml":
+                    labels, centroids = opening_files.extract_centroid_info_from_lml(centroid_path)
+                else:
+                    labels, centroids = opening_files.extract_centroid_info_from_json(centroid_path)
             scan_name = (scan_path.rsplit('/', 1)[-1])[:-len(volume_format)]
             volume, *_ = opening_files.read_volume_nii_format(scan_path, spacing=spacing)
 
@@ -736,10 +751,13 @@ def get_stats(scans_dir, volume_format, label_format, ignore_small_masks_detecti
     for i, scan_path in enumerate(scan_paths):
         print(i, scan_path)
 
-        if volume_format == '.nii.gz' and label_format == ".lml":
+        if volume_format == '.nii.gz':
             scan_path_without_ext = scan_path[:-len(volume_format)]
             centroid_path = scan_path_without_ext + label_format
-            labels, centroids = opening_files.extract_centroid_info_from_lml(centroid_path)
+            if label_format == ".lml":
+                labels, centroids = opening_files.extract_centroid_info_from_lml(centroid_path)
+            else:
+                labels, centroids = opening_files.extract_centroid_info_from_json(centroid_path)
             volume, *_ = opening_files.read_volume_nii_format(scan_path, spacing=spacing)
 
         elif volume_format == '.dcm' and label_format == ".nii.gz":
@@ -865,10 +883,13 @@ def get_stats(scans_dir, volume_format, label_format, ignore_small_masks_detecti
 def single_detection(scan_path, plot_path, volume_format, label_format, ignore_small_masks_detection,
                      detection_input_size, detection_input_shift, spacing=(1.0, 1.0, 1.0),
                      weights=np.array([0.1, 0.9])):
-    if volume_format == '.nii.gz' and label_format == ".lml":
+    if volume_format == '.nii.gz':
         scan_path_without_ext = scan_path[:-len(volume_format)]
         centroid_path = scan_path_without_ext + label_format
-        labels, centroids = opening_files.extract_centroid_info_from_lml(centroid_path)
+        if label_format == ".lml":
+            labels, centroids = opening_files.extract_centroid_info_from_lml(centroid_path)
+        else:
+            labels, centroids = opening_files.extract_centroid_info_from_json(centroid_path)
         scan_name = (scan_path.rsplit('/', 1)[-1])[:-len(volume_format)]
         volume, *_ = opening_files.read_volume_nii_format(scan_path, spacing=spacing)
 
@@ -907,10 +928,13 @@ def single_detection(scan_path, plot_path, volume_format, label_format, ignore_s
 def single_identification(scan_path, plot_path, volume_format, label_format, ignore_small_masks_detection,
                           detection_input_size, detection_input_shift, spacing=(1.0, 1.0, 1.0),
                           weights=np.array([0.1, 0.9])):
-    if volume_format == '.nii.gz' and label_format == ".lml":
+    if volume_format == '.nii.gz':
         scan_path_without_ext = scan_path[:-len(volume_format)]
         centroid_path = scan_path_without_ext + label_format
-        labels, centroids = opening_files.extract_centroid_info_from_lml(centroid_path)
+        if label_format == ".lml":
+            labels, centroids = opening_files.extract_centroid_info_from_lml(centroid_path)
+        else:
+            labels, centroids = opening_files.extract_centroid_info_from_json(centroid_path)
         scan_name = (scan_path.rsplit('/', 1)[-1])[:-len(volume_format)]
         volume, *_ = opening_files.read_volume_nii_format(scan_path, spacing=spacing)
 

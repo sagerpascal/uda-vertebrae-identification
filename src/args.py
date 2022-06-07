@@ -4,7 +4,7 @@ import argparse
 def get_train_args() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='PyTorch Vertebrae Detection and Identification')
     parser.add_argument('--src_dataset', type=str, default="biomedia",  choices=["biomedia"])
-    parser.add_argument('--tgt_dataset', type=str, default="covid19-ct", choices=["covid19-ct"])
+    parser.add_argument('--tgt_dataset', type=str, default="covid19-ct", choices=["covid19-ct", "verse19"])
     parser.add_argument('--mode', type=str, default="detection", choices=["detection", "identification"])
     parser.add_argument('--use_labeled_tgt', action="store_true", help="Use labeled target data for evaluation during training")
     parser.add_argument("--train_some_tgt_labels", action="store_true", help='use some target labels during training to compare performance')

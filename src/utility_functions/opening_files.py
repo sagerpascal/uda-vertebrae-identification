@@ -1,8 +1,10 @@
 import SimpleITK as sitk
 import numpy as np
-
+import json
 from utility_functions import processing
 from utility_functions.labels import KSA_ID_LABEL_MAP
+import nibabel as nib
+from preprocessing.reorient_verse import reorient_to, resample_nib
 
 
 def read_volume_nii_format(dir, spacing):
@@ -81,29 +83,60 @@ def extract_centroid_info_from_lml(dir):
         labels.append(centroid_line_split[1].split("_")[0])
         centroids.append(np.array(centroid_line_split[2:5]).astype(float))
 
-    # labels is a list containing the vertebraes in the scan (e.g. ['T1', 'T2', 'T3', ...]
-    # centroids is a list containing a np array with the coordiantes per vertebrae (e.g. [array([109.1, 27.8, 405.0]), ...]
-    return labels, centroids  # Sagital view: 0=Z, 1=Y, 2=X
+    return labels, centroids
+
+def extract_centroid_info_from_json(dir):
+    centroids_file = open(dir, 'r')
+    data = json.load(centroids_file)
+
+    labels = []
+    centroids = []
+
+    for entry in data:
+        print(entry)
+        if not "label" in entry:
+            continue
+        labels.append(KSA_ID_LABEL_MAP[entry['label']])
+        centroids.append(np.array([entry['X'], entry['Y'], entry['Z']], dtype="float"))
+
+    return labels, centroids
 
 
 def _read_nii_file(dir, spacing, is_label):
-    reader = sitk.ImageFileReader()
-    reader.SetFileName(dir)
-    reader.LoadPrivateTagsOn()
-    reader.ReadImageInformation()
-    sitk_dir = reader.Execute()
-    sitk_dir = processing.resample_image(sitk_dir, is_label=is_label,
-                                         out_spacing=spacing)  # change image size, spacing, etc.
+    try:
+        reader = sitk.ImageFileReader()
+        reader.SetFileName(dir)
+        reader.LoadPrivateTagsOn()
+        reader.ReadImageInformation()
+        sitk_dir = reader.Execute()
+        sitk_dir = processing.resample_image(sitk_dir, is_label=is_label, out_spacing=spacing)
+        image_np = sitk.GetArrayFromImage(sitk_dir)
+        mean, variance = np.mean(image_np[image_np > 0]), np.std(image_np[image_np > 0])
+        sitk_dir = processing.zero_mean_unit_var(sitk_dir)  # normalization
+        img = sitk.GetArrayFromImage(sitk_dir)
+
+    except Exception as e:
+        print("Could not open file with SimpleITK", dir, "Now trying NiBabel...", e)
+        img_nib = nib.load(dir)
+        img_iso = resample_nib(img_nib, voxel_spacing=(1, 1, 1), order=3)
+        img_iso = reorient_to(img_iso, axcodes_to=('L', 'P', 'S'))
+
+        image_np = img_iso.get_fdata().astype(np.float32)
+        mean, variance = np.mean(image_np[image_np > 0]), np.std(image_np[image_np > 0])
+
+        if variance > 0:
+            image_np = (image_np - mean) / variance
+
+        img = image_np
+
     if not is_label:
         metadata = {
             'Patient ID': "",
             'Patient Sex': "",
             'Series Description': "",
         }
-        image_np = sitk.GetArrayFromImage(sitk_dir)
-        mean, variance = np.mean(image_np[image_np > 0]), np.std(image_np[image_np > 0])
-        sitk_dir = processing.zero_mean_unit_var(sitk_dir)  # normalization
-        return sitk.GetArrayFromImage(sitk_dir).T, mean, variance, metadata
+
+        return img.T, mean, variance, metadata
 
     else:
-        return sitk.GetArrayFromImage(sitk_dir).T
+        return img.T

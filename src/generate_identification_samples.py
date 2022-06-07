@@ -55,14 +55,17 @@ def generate_slice_samples(dataset_dir, sample_dir, sample_size, spacing, no_of_
 
     for cnt, data_path in tqdm(enumerate(paths), total=len(paths)):
 
-        if volume_format == '.nii.gz' and (label_format == ".lml" or not with_label):
+        if volume_format == '.nii.gz':
             # get path to corresponding metadata
             data_path_without_ext = data_path[:-ext_len]
             metadata_path = data_path_without_ext + ".lml"
 
             volume, *_ = opening_files.read_volume_nii_format(data_path, spacing=spacing)
             if with_label:
-                labels, centroids = opening_files.extract_centroid_info_from_lml(metadata_path)
+                if label_format == ".lml":
+                    labels, centroids = opening_files.extract_centroid_info_from_lml(metadata_path)
+                else:
+                    labels, centroids = opening_files.extract_centroid_info_from_json(metadata_path)
             name = (data_path.rsplit('/', 1)[-1])[:-ext_len]
 
         elif volume_format == '.dcm' and (label_format == ".nii.gz" or not with_label):

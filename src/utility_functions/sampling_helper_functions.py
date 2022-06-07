@@ -1,6 +1,6 @@
 import numpy as np
 
-from utility_functions.labels import LABELS, LABELS_NO_L6, VERTEBRAE_SIZES
+from utility_functions.labels import LABELS_NO_L6, VERTEBRAE_SIZES
 
 
 # takes in a volume of predictions (0 and 1s) and takes out all but the largest island of points
@@ -77,35 +77,6 @@ def get_island(point, explored, predictions):
                                         and np.all(np.less(next_point, predictions.shape)):
                                     stack.append(next_point)
     return acc
-
-
-# NOTE old function
-def spherical_densely_label(volume_shape, radius, labels, centroids, use_labels):
-    dense_labelling = np.zeros(volume_shape)
-
-    upper_clip = volume_shape - np.ones(3)
-
-    for label, centroid in zip(labels, centroids):
-
-        corner_a = centroid - radius
-        corner_a = np.clip(corner_a, a_min=np.zeros(3), a_max=upper_clip).astype(int)
-        corner_b = centroid + radius
-        corner_b = np.clip(corner_b, a_min=np.zeros(3), a_max=upper_clip).astype(int)
-
-        label_value = 1
-        if use_labels:
-            if label == 'L6':
-                print("has L6 vertebrae")
-            label_value = LABELS.index(label)
-
-        for x in range(corner_a[0], corner_b[0]):
-            for y in range(corner_a[1], corner_b[1]):
-                for z in range(corner_a[2], corner_b[2]):
-                    point = np.array([x, y, z])
-                    if np.linalg.norm(point - centroid) <= radius:
-                        dense_labelling[x, y, z] = label_value
-
-    return dense_labelling
 
 
 def densely_label(volume_shape, disk_indices, labels, centroids, use_labels):
