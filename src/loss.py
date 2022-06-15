@@ -28,7 +28,6 @@ class RegionProposalLoss(nn.Module):
 
     def forward(self, tgt_img, y_tgt_pr, mask, weak_mask):
         loss = torch.tensor(0., device='cuda')
-        weak_labels = torch.zeros_like(y_tgt_pr)
         for b in range(tgt_img.shape[0]):
             proposed_mask_b = weak_mask[b]
             y_tgt_pr_b = y_tgt_pr[b].squeeze(0)
@@ -40,16 +39,7 @@ class RegionProposalLoss(nn.Module):
             if len(proposed_masks) > 0:
                 loss /= len(proposed_masks)
 
-            y_tgt_pr_b = torch.round(y_tgt_pr_b)
-            for value in torch.unique(proposed_mask_b):
-                if value == 0:
-                    continue
-                med = torch.median(y_tgt_pr_b[proposed_mask_b == value])
-                proposed_mask_b[proposed_mask_b == value] = float(med)
-                weak_labels[b] = proposed_mask_b
-
         return loss
-
 
 class DescendingLoss(nn.Module):
 
