@@ -172,3 +172,22 @@ python train.py --mode identification --use_vertebrae_loss --epochs 100 --lr 0.0
 ```bash
 python measure.py --testing_dataset_dir <testing_dataset_dir> --volume_format <volume_format> --label_format <label_format> --resume_detection <path/to/detection_model.pth> --resume_identification <path/to/identification_model.pth> --ignore_small_masks_detection
 ```
+
+# Citation
+Please cite this work as:
+```
+@Article{jimaging8080222,
+ author         = {Sager, Pascal and Salzmann, Sebastian and Burn, Felice and Stadelmann, Thilo},
+ title          = {Unsupervised Domain Adaptation for Vertebrae Detection and Identification in 3D CT Volumes Using a Domain Sanity Loss},
+ journal        = {Journal of Imaging},
+ volume         = {8},
+ year           = {2022},
+ month          = {Aug},
+ number         = {8},
+ article-number = {222},
+ url            = {https://www.mdpi.com/2313-433X/8/8/222},
+ PubMedID       = {36005465},
+ issn           = {2313-433X},
+ doi            = {10.3390/jimaging8080222}
+}
+```
